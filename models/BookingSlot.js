@@ -5,6 +5,7 @@ const bookingSlotSchema = new mongoose.Schema({
   time: String,
   maxClients: Number,
   bookedClients: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Client' }],
+  adminId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', required: true },
   isFull: {
     type: Boolean,
     default: false

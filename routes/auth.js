@@ -21,8 +21,11 @@ router.post('/auth/register', async (req, res) => {
       subscriptionType,
       totalSessions,
       startDate,
-      endDate
+      endDate,
+      adminId // 👈 הוסף כאן
     } = req.body;
+
+    if (!adminId) return res.status(400).json({ error: 'adminId is required' });
 
     const passwordHash = await bcrypt.hash(password, 10);
 
@@ -34,15 +37,20 @@ router.post('/auth/register', async (req, res) => {
       totalSessions,
       usedSessions: 0,
       startDate: startDate || new Date(),
-      endDate: endDate || null
+      endDate: endDate || null,
+      adminId // 👈 שמירה בפועל
     });
-
+    const existingClient = await Client.findOne({ email });
+      if (existingClient) {
+        return res.status(400).json({ error: 'אימייל זה כבר רשום במערכת' });
+      }
     await client.save();
     res.status(201).json({ message: 'Client registered successfully', client });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
+
 
 
 
@@ -64,9 +72,27 @@ router.post('/auth/login', async (req, res) => {
 });
 
 // Protected: Get profile
-router.get('/me', authMiddleware, async (req, res) => {
-  const client = await Client.findById(req.userId).select('-passwordHash');
-  res.json(client);
+router.get('/auth/me', authMiddleware, async (req, res) => {
+  try {
+    const client = await Client.findById(req.userId).select('-passwordHash');
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+    res.json(client);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// בקובץ routes/admin.js
+router.get('/admin/clients', authMiddleware, async (req, res) => {
+  try {
+    const clients = await Client.find({ adminId: req.userId });
+    res.json(clients);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 module.exports = router;
