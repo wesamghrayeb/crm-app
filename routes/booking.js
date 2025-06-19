@@ -1,84 +1,102 @@
 const express = require('express');
+const router = express.Router();
 const BookingSlot = require('../models/BookingSlot');
 const Client = require('../models/Client');
-const auth = require('../middleware/authMiddleware');
-// const { sendEmail } = require('../utils/mailer'); // השבתה זמנית עד הגדרת SMTP
+const authMiddleware = require('../middleware/authMiddleware');
 
-const router = express.Router();
-
-// Get all booking slots (filtered by available only)
-router.get('/slots', auth, async (req, res) => {
-  const slots = await BookingSlot.find();
-  const available = slots.filter(slot => slot.bookedClients.length < slot.maxClients);
-  res.json(available);
-});
-
-// Book a slot
-router.post('/slots/:id/book', auth, async (req, res) => {
+// BOOK slot
+router.post('/slots/:id/book', authMiddleware, async (req, res) => {
   try {
+    const user = await Client.findById(req.userId);
+    if (!user || user.role !== 'client') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const slot = await BookingSlot.findById(req.params.id);
     if (!slot) return res.status(404).json({ error: 'Slot not found' });
 
-    if (slot.bookedClients.includes(req.userId))
+    // Already booked this slot?
+    if (slot.bookedClients.includes(user._id)) {
       return res.status(400).json({ error: 'Already booked' });
+    }
 
-    if (slot.bookedClients.length >= slot.maxClients)
+    // Full slot?
+    if (slot.bookedClients.length >= slot.maxClients) {
       return res.status(400).json({ error: 'Slot is full' });
+    }
 
-    // Update slot
-    slot.bookedClients.push(req.userId);
+    // Used all sessions?
+    if (user.usedSessions >= user.totalSessions) {
+      return res.status(400).json({ error: 'No remaining sessions' });
+    }
+
+    // Check if user already booked a slot on the same date
+    const sameDaySlot = await BookingSlot.findOne({
+      date: slot.date,
+      bookedClients: user._id
+    });
+
+    if (sameDaySlot) {
+      return res.status(400).json({ error: '! יש לך תור ביום הזה' });
+    }
+
+    // Book slot
+    slot.bookedClients.push(user._id);
+    slot.history = slot.history || [];
+    slot.history.push({
+      clientId: user._id,
+      action: 'booked',
+      timestamp: new Date()
+    });
+
     await slot.save();
 
-    // Update client usage
-    const client = await Client.findById(req.userId);
-    client.usedSessions += 1;
-    await client.save();
+    user.usedSessions += 1;
+    await user.save();
 
-    // Send confirmation email (disabled)
-    /*
-    await sendEmail(
-      client.email,
-      'Booking Confirmed',
-      `You booked: ${slot.date} ${slot.time}`
-    );
-    */
-
-    res.json({ message: 'Booked successfully' });
-
+    res.json({ message: 'Slot booked successfully' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Something went wrong' });
+    console.error('Booking error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Cancel booking
-router.post('/slots/:id/cancel', auth, async (req, res) => {
+
+// CANCEL slot
+router.post('/slots/:id/cancel', authMiddleware, async (req, res) => {
   try {
+    const user = await Client.findById(req.userId);
+    if (!user || user.role !== 'client') {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const slot = await BookingSlot.findById(req.params.id);
     if (!slot) return res.status(404).json({ error: 'Slot not found' });
 
-    slot.bookedClients = slot.bookedClients.filter(id => id.toString() !== req.userId);
-    await slot.save();
-
-    const client = await Client.findById(req.userId);
-
-    // Optional: decrease usedSessions if needed
-    if (client.usedSessions > 0) {
-      client.usedSessions -= 1;
-      await client.save();
+    if (!slot.bookedClients.includes(user._id)) {
+      return res.status(400).json({ error: 'You have not booked this slot' });
     }
 
-    // Send cancellation email (disabled)
-    /*
-    await sendEmail(client.email, 'Booking Canceled', `Canceled: ${slot.date} ${slot.time}`);
-    await sendEmail('admin@example.com', 'Client Canceled Booking', `${client.fullName} canceled ${slot.date} ${slot.time}`);
-    */
+    slot.bookedClients = slot.bookedClients.filter(
+      id => id.toString() !== user._id.toString()
+    );
 
-    res.json({ message: 'Booking canceled' });
+    slot.history = slot.history || [];
+    slot.history.push({
+      clientId: user._id,
+      action: 'canceled',
+      timestamp: new Date()
+    });
 
+    await slot.save();
+
+    user.usedSessions = Math.max(user.usedSessions - 1, 0);
+    await user.save();
+
+    res.json({ message: 'Slot canceled successfully' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Something went wrong' });
+    console.error('Cancelation error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

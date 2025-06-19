@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Client = require('../models/Client');
 const authMiddleware = require('../middleware/authMiddleware');
-
+const BookingSlot = require('../models/BookingSlot');
 const router = express.Router();
 //checking
 router.get('/auth/test', (req, res) => {
@@ -94,5 +94,74 @@ router.get('/admin/clients', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+// GET /client/me — full profile + bookings
+router.get('/client/me', authMiddleware, async (req, res) => {
+  try {
+    const client = await Client.findById(req.userId).select('-passwordHash');
+    if (!client || client.role !== 'client') {
+      return res.status(403).json({ error: 'גישה נדחתה' });
+    }
+
+    const bookings = await BookingSlot.find({ bookedClients: client._id }).sort({ date: -1, time: -1 });
+
+    res.json({ client, bookings });
+  } catch (err) {
+    console.error('שגיאה בטעינת פרופיל:', err);
+    res.status(500).json({ error: 'שגיאה בשרת' });
+  }
+});
+
+// PUT /client/change-password
+router.put('/client/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Missing fields' });
+    }
+
+    const client = await Client.findById(req.userId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    const isMatch = await bcrypt.compare(currentPassword, client.passwordHash);
+    if (!isMatch) return res.status(400).json({ error: 'Incorrect current password' });
+
+    client.passwordHash = await bcrypt.hash(newPassword, 10);
+    await client.save();
+    res.json({ message: 'Password updated successfully' });
+  } catch (err) {
+    console.error('Password change error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /client/change-email
+router.put('/client/change-email', authMiddleware, async (req, res) => {
+  try {
+    const { newEmail } = req.body;
+    if (!newEmail) {
+      return res.status(400).json({ error: 'New email is required' });
+    }
+
+    const existing = await Client.findOne({ email: newEmail });
+    if (existing) {
+      return res.status(400).json({ error: 'Email already in use' });
+    }
+
+    const client = await Client.findById(req.userId);
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    client.email = newEmail;
+    await client.save();
+    res.json({ message: 'Email updated successfully' });
+  } catch (err) {
+    console.error('Email change error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 
 module.exports = router;
